@@ -1,59 +1,90 @@
 library(Seurat)
 library(SeuratObject)
+library(tidyverse)
+library(svglite)
 
+seurat <- readRDS("pbmc_small.rds")
 seurat <- readRDS("Zhou_2020.rds")
 View(seurat@meta.data)
 
-
-
+# Annotation function ----
+seurat <- readRDS("Zhou_2020.rds")
+class(seurat)
 
 QCalc <- function(obj, species = c("Human", "Mouse")) {
   
-  data <- readRDS(obj)
-  
-  if(class(data) != "Seurat") 
+  if(class(obj) != "Seurat")
     stop("Not a seurat object")
+  
+  obj$log10GenesPerUMI <- log10(obj$nFeature_RNA) / log10(obj$nCount_RNA)
   
   if(species == "Human") {
-    data$log10GenesPerUMI <- log10(data$nFeature_RNA) / log10(data$nCount_RNA)
-    data$mitoRatio <- PercentageFeatureSet(object = data, pattern = "^MT-")
-    data$mitoRatio <- data@meta.data$mitoRatio / 100
-    data$riboRatio <- PercentageFeatureSet(object = data, pattern = "^RP[SL]")
-    data$riboRatio <- data@meta.data$riboRatio / 100
+    obj$mitoRatio <- PercentageFeatureSet(object = obj, pattern = "^MT-")
+    obj$mitoRatio <- obj@meta.data$mitoRatio / 100
+    obj$riboRatio <- PercentageFeatureSet(object = obj, pattern = "^RP[SL]")
+    obj$riboRatio <- obj@meta.data$riboRatio / 100
+  
+  } else if(species == "Mouse") {
+    obj$mitoRatio <- PercentageFeatureSet(object = data, pattern = "^mt-")
+    obj$mitoRatio <- obj@meta.data$mitoRatio / 100
+    obj$riboRatio <- PercentageFeatureSet(object = data, pattern = "^Rpl|^Rps")
+    obj$riboRatio <- obj@meta.data$riboRatio / 100
   }
   
-  data$log10GenesPerUMI <- log10(data$nFeature_RNA) / log10(data$nCount_RNA)
-  data$mitoRatio <- PercentageFeatureSet(object = data, pattern = "^Mt-")
-  data$mitoRatio <- data@meta.data$mitoRatio / 100
-  data$riboRatio <- PercentageFeatureSet(object = data, pattern = "^Rp[sl]")
-  data$riboRatio <- data@meta.data$riboRatio / 100
-  
-  data
-}  
-
-
-x <- QCalc("Zhou_2020.rds", species = "Mouse")
+  return(obj)
+}
+x <- QCalc(seurat, species = "Human")
 View(x@meta.data)
 
-QC <- function(obj, annot = F) {
-  data <- readRDS(obj)
+
+# Quality Controrl Cut-off ----
+QC <- function(obj, gene = 200, mito = 0.25, ribo = 0.20, umi = 400, genes_umi = 0.65, doublet = 0.0, min.cells = 5) {
   
-  if(class(data) != "Seurat") 
+  if(class(obj) != "Seurat") 
     stop("Not a seurat object")
+  message("Seurat object found. Processing...")
   
-  if(annot) {
+  if(is.numeric(gene) & is.numeric(mito) & is.numeric(ribo) & is.numeric(umi)) {
+    filtered_seurat <- subset(x = obj, subset = (nCount_RNA >= umi) & 
+                                                (nFeature_RNA >= gene) &
+                                                (log10GenesPerUMI > genes_umi) & 
+                                                (mitoRatio < mito) &
+                                                (riboRatio <= ribo) &
+                                                (scDblFinder.score < doublet))
     
+    counts <- GetAssayData(filtered_seurat, slot = "counts") # v5 -> count = "counts"
+    nonzero <- counts > 0
+    keep_genes <- Matrix::rowSums(nonzero) >= min.cells
+    filtered_counts <- counts[keep_genes, ]
+    filtered_seurat <- CreateSeuratObject(filtered_counts, meta.data = filtered_seurat@meta.data)
+    
+    return(filtered_seurat)
   }
-  
 }
 
-  
-y <- TRUE
+a <- QC(x)  
+View(a@meta.data)
 
-if(y) {
-  print("Hi")
+# Quality Control Visualization ----
+QCvis <- function(obj, feature = NULL, param = NULL, xintercept = NULL, log10 = T) {
+  metadata <- obj@meta.data
+  
+  if (log10) {
+    
+    ggplot(metadata, aes_string(color=feature, x=param, fill=feature)) + 
+      geom_density(alpha = 0.2) + 
+      scale_x_log10() + 
+      theme_classic() +
+      ylab("Cell density") +
+      geom_vline(xintercept = 600)
+    
+  } else {
+    ggplot(metadata, aes_string(color=feature, x=param, fill=feature)) + 
+      geom_density(alpha = 0.2) + 
+      theme_classic() +
+      geom_vline(xintercept = 0.020)
+  }
+    
 }
 
-
-x <- QualityControl("Zhou_2020.rds")
-View(x@meta.data)
+QCvis(x, feature = "Sample", param = "log10GenesPerUMI", log10 = F)
